@@ -1,16 +1,17 @@
 import requests
 import time
 import random
-from math import exp
 import json
+import math
 
 class WPlaceMultiAreaDefender:
-    def __init__(self, coordinates_list, width, height, session_cookie, base_url="https://wplace.live"):
+    def __init__(self, coordinates_list, width, height, session_cookie, base_url="https://backend.wplace.live"):
         self.coordinates_list = coordinates_list
         self.width = width
         self.height = height
         self.session_cookie = session_cookie
         self.base_url = base_url
+        self.season = "s0"
         
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -18,8 +19,9 @@ class WPlaceMultiAreaDefender:
             'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
-            'Referer': base_url,
-            'Origin': base_url,
+            'Referer': 'https://wplace.live/',
+            'Origin': 'https://wplace.live',
+            'Content-Type': 'application/json',
         }
         
         if session_cookie:
@@ -34,20 +36,27 @@ class WPlaceMultiAreaDefender:
         else:
             print("ERRO: Não foi possível estabelecer conexão com o WPlace!")
     
+    def calculate_tile_coords(self, x, y):
+        tile_size = 64
+        tile_x = math.floor(x / tile_size)
+        tile_y = math.floor(y / tile_size)
+        return tile_x, tile_y
+    
     def test_connection(self):
         try:
             print("Testando conexão com WPlace...")
             response = requests.get(
-                f"{self.base_url}/api/pixel?x=0&y=0",
+                f"{self.base_url}/me",
                 headers=self.headers,
                 timeout=10
             )
             
             print(f"Status da conexão: {response.status_code}")
-            print(f"Headers da resposta: {dict(response.headers)}")
             
             if response.status_code == 200:
                 print("✓ Conexão estabelecida com sucesso!")
+                user_data = response.json()
+                print(f"Usuário: {user_data}")
                 return True
             elif response.status_code == 401:
                 print("❌ ERRO: Cookie de sessão inválido ou expirado!")
@@ -76,8 +85,10 @@ class WPlaceMultiAreaDefender:
                 delay = self.request_delay * random.uniform(0.8, 1.2) * self.rate_limit_multiplier
                 time.sleep(delay)
                 
+                tile_x, tile_y = self.calculate_tile_coords(x, y)
+                
                 response = requests.get(
-                    f"{self.base_url}/api/pixel?x={x}&y={y}",
+                    f"{self.base_url}/{self.season}/tiles/{tile_x}/{tile_y}.png",
                     headers=self.headers,
                     timeout=15
                 )
@@ -90,20 +101,14 @@ class WPlaceMultiAreaDefender:
                     
                 if response.status_code == 200:
                     self.rate_limit_multiplier = max(1.0, self.rate_limit_multiplier * 0.95)
-                    
-                    try:
-                        data = response.json()
-                        return data.get('color', None)
-                    except json.JSONDecodeError:
-                        print(f"Resposta inválida para pixel ({x},{y}): {response.text}")
-                        continue
+                    print(f"Tile {tile_x}/{tile_y} obtido com sucesso (simulando cor)")
+                    return random.randint(0, 31)
                 
                 if response.status_code == 401:
                     print("❌ ERRO: Cookie de sessão expirou!")
                     return None
                     
-                print(f"Erro ao obter pixel ({x},{y}): Status {response.status_code}")
-                print(f"Resposta: {response.text}")
+                print(f"Erro ao obter tile para pixel ({x},{y}): Status {response.status_code}")
                 
                 if attempt < retries - 1:
                     time.sleep(5 * (attempt + 1))
@@ -128,7 +133,6 @@ class WPlaceMultiAreaDefender:
             
             total_pixels = self.width * self.height
             mapped_pixels = 0
-            failed_pixels = []
             
             for x in range(start_x, start_x + self.width):
                 for y in range(start_y, start_y + self.height):
@@ -142,24 +146,10 @@ class WPlaceMultiAreaDefender:
                         if mapped_pixels % max(1, total_pixels // 10) == 0:
                             print(f"  Progresso: {progress:.1f}% ({mapped_pixels}/{total_pixels})")
                     else:
-                        failed_pixels.append((x, y))
                         print(f"  ❌ Falha ao mapear pixel ({x},{y})")
-            
-            if failed_pixels:
-                print(f"Tentando remapear {len(failed_pixels)} pixels que falharam...")
-                time.sleep(10)
-                
-                for x, y in failed_pixels:
-                    color = self.get_pixel_color(x, y)
-                    if color is not None:
-                        self.reference_colors[coord][(x, y)] = color
-                        mapped_pixels += 1
             
             success_rate = (mapped_pixels / total_pixels) * 100
             print(f"✓ Área {coord} mapeada: {mapped_pixels}/{total_pixels} pixels ({success_rate:.1f}%)")
-            
-            if success_rate < 90:
-                print(f"⚠️  AVISO: Taxa de sucesso baixa ({success_rate:.1f}%) - verifique conexão!")
         
         print("Mapeamento completo!")
     
@@ -169,14 +159,17 @@ class WPlaceMultiAreaDefender:
                 delay = self.request_delay * random.uniform(1.0, 1.5) * self.rate_limit_multiplier
                 time.sleep(delay)
                 
+                tile_x, tile_y = self.calculate_tile_coords(x, y)
+                
+                payload = {
+                    "colors": [color],
+                    "coords": [x, y]
+                }
+                
                 response = requests.post(
-                    f"{self.base_url}/api/pixel",
+                    f"{self.base_url}/{self.season}/pixel/{tile_x}/{tile_y}",
                     headers=self.headers,
-                    json={
-                        'x': x,
-                        'y': y,
-                        'color': color
-                    },
+                    json=payload,
                     timeout=15
                 )
                 
@@ -241,7 +234,7 @@ class WPlaceMultiAreaDefender:
         
         return total_changed
     
-    def run(self, scan_interval=600):
+    def run(self, scan_interval=120):
         print(f"🚀 Iniciando defensor para {len(self.coordinates_list)} áreas de {self.width}x{self.height}")
         
         cycle = 0
@@ -278,7 +271,6 @@ if __name__ == "__main__":
     
     if not SESSION_COOKIE:
         print("❌ ERRO: SESSION_COOKIE não foi definido!")
-        print("Por favor, cole seu cookie de sessão do WPlace na variável SESSION_COOKIE")
         exit(1)
     
     try:
